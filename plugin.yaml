@@ -1,0 +1,50 @@
+name: typesafe-skill-router
+version: 1.0.0
+description: >-
+  TypeSafe (Jev) skill routing: the request is read before the model call and the one skill
+  from your live roster that fits it is named in a single line on the user message. Says
+  nothing when nothing fits. Stdlib only, about $0.001 per turn.
+author: Ritesh Patel (@DECRUX9812)
+license: MIT
+homepage: https://github.com/DECRUX9812/typesafe-skill-router
+requires_hermes: ">=0.21"
+kind: standalone
+tags:
+  - routing
+  - skills
+  - hooks
+  - typesafe
+  - cost-control
+provides_tools: []
+provides_hooks:
+  - pre_llm_call
+provides_middleware: []
+requires_env:
+  - TYPESAFE_API_KEY
+config_schema:
+  enabled:
+    type: bool
+  gate:
+    type: float
+  fits:
+    type: float
+  shortlist:
+    type: int
+  chunk:
+    type: int
+  excerpt:
+    type: int
+  timeout:
+    type: float
+  suggest_chars:
+    type: int
+  model:
+    type: str
+  base_url:
+    type: str
+  roster_dir:
+    type: str
+  cache_path:
+    type: str
+  log_path:
+    type: str
