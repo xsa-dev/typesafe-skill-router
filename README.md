@@ -96,6 +96,28 @@ The vendor publishes an agent-level effect for the same idea (315 graded turns, 
 the system prompt): wrong skill loads 16.8% → 7.3%, needless loads 9.8% → 4.0%, 37 turns fixed
 against 7 broken. Treat that as direction from *their* roster, not as a result from yours.
 
+## Observed in live use
+
+Not a benchmark — the raw log lines from one operator's first few turns on a 292-skill roster
+(Ubuntu 24.04, desktop + CLI). `-` means nothing was injected.
+
+```
+23:03:36  suggest  -                             gate=0.6067  <- silent on a request whose fitting skill was hermes-plugin-development (a miss)
+23:26:28  suggest  -                             gate=0.2967  <- silent on a conversational turn (correctly quiet)
+23:35:34  suggest  tldr-communication            gate=0.3667  <- "explain in simple terms" (correct)
+23:49:36  suggest  hermes-agent-skill-authoring  gate=0.5100  <- off-target: that turn needed no skill authoring
+```
+
+Four turns is an anecdote, not a rate, and that is the point: both failure modes this two-stage
+design exists to control — a wrong suggestion and a missed one — showed up inside the first few
+turns, while the gate stayed quiet on the turn that needed nothing. The off-target line is also
+the design working as intended: the injected block says *ignore this if it does not fit*, and it
+was ignored.
+
+That is why the plugin logs one line per decision. The log is half of a scorecard (what was
+suggested); the session store is the other half (what the turn actually loaded), so a report pass
+can score real turns before anyone tunes a threshold — rather than tuning on vibes.
+
 ## How it works
 
 Two requests, thresholds in code:
