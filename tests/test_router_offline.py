@@ -110,6 +110,58 @@ def test_fits_threshold_is_configurable():
     assert result.names == ("skill-000",)
 
 
+# ─── stage 2 decides with both signals, not the Choice winner alone ─────────
+def test_fits_leader_overrides_the_choice_winner_when_it_leads_by_the_margin():
+    """The reported miss: Choice picks a sibling at 0.54 while the right skill sits at 0.70."""
+    client = scripted_client(
+        stage1="invoice-lookup", stage2="invoice-lookup",
+        fits={"invoice-send": 0.70, "invoice-lookup": 0.54},
+    )
+    request = "look up the acme invoice and send it if it is still unpaid"
+    result = suggest(client, request,
+                     [skill("invoice-lookup"), skill("invoice-send"), skill("package-search")])
+
+    assert result.names == ("invoice-send",)
+    assert result.winner == "invoice-lookup"  # the Choice winner stays visible as evidence
+    assert "override" in result.reason
+
+
+def test_a_fits_lead_under_the_margin_stays_silent():
+    """A disagreement without a decisive lead is a coin flip; silence beats a wrong name —
+    even though the winner's own 0.50 clears the bar."""
+    client = scripted_client(stage1="skill-000", stage2="skill-000",
+                             fits={"skill-000": 0.50, "skill-001": 0.60})
+    result = suggest(client, "do the thing", roster(30))
+
+    assert result.names == ()
+    assert "margin" in result.reason
+
+
+def test_fits_leader_below_the_bar_cannot_override():
+    """The override candidate must clear the fits bar itself — a big lead is not enough."""
+    client = scripted_client(stage1="skill-000", stage2="skill-000",
+                             fits={"skill-000": 0.05, "skill-001": 0.35})
+    result = suggest(client, "do the thing", roster(30))
+
+    assert result.names == ()
+    assert "nothing fits" in result.reason
+
+
+def test_winner_tied_with_the_fits_leader_still_wins():
+    """A tie counts as agreement: the Choice breaks it and the bar still applies."""
+    client = scripted_client(stage1="skill-000", stage2="skill-000",
+                             fits={"skill-000": 0.60, "skill-001": 0.60})
+    result = suggest(client, "do the thing", roster(30))
+    assert result.names == ("skill-000",)
+
+
+def test_fits_margin_is_configurable():
+    client = scripted_client(stage1="skill-000", stage2="skill-000",
+                             fits={"skill-000": 0.50, "skill-001": 0.60})
+    result = suggest(client, "do the thing", roster(30), fits_margin=0.05)
+    assert result.names == ("skill-001",)
+
+
 def test_gate_averages_oriented_values():
     """prose_suffices counts inverted: (0.95 + 0.56 + (1 - 0.27)) / 3 = 0.7467."""
     client = scripted_client(stage1="skill-000", gate=(0.95, 0.56, 0.27),

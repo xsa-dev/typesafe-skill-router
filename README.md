@@ -59,6 +59,7 @@ Under `plugins.entries.typesafe-skill-router.settings` in `config.yaml` (all opt
 | `enabled` | `false` | Master switch. Nothing is sent anywhere until this is true. |
 | `gate` | `0.30` | Mean of the three request judgments. Below it, nothing is suggested and no second request is spent. |
 | `fits` | `0.40` | The winner's own "does this skill do the specific thing asked for" judgment. Below it, nothing is injected. |
+| `fits_margin` | `0.15` | When `fits` prefers a different candidate than the `Choice` winner, it takes over only by leading the winner's own `fits` by this much (and clearing `fits` itself). |
 | `shortlist` | `3` | Candidates carried into the second request. |
 | `chunk` | `240` | Skills per request. The API caps a question at 255 options. |
 | `excerpt` | `700` | Characters of `SKILL.md` shown per shortlisted candidate. |
@@ -72,6 +73,10 @@ Under `plugins.entries.typesafe-skill-router.settings` in `config.yaml` (all opt
 Thresholds live in code, and the answers are cached, so re-tuning them costs nothing: change a
 number, replay the same requests, compare. Slash commands are never routed, and multi-part
 (multimodal) messages are left alone.
+
+One caveat on tuning: thresholds measured on English requests sit differently elsewhere. An
+independent check found the same request scoring ~0.14 lower on `fits` in Spanish than in
+English — at `0.40`, the difference between a suggestion and silence.
 
 ## What leaves your machine
 
@@ -90,7 +95,10 @@ Turn it off at any time with `hermes typesafe-skill-router off` (or `enabled: fa
 
 Measured on one machine with a 292-skill roster: **~0.6–1.2 s per routed turn**, **~$0.001 per
 request**, 3 API calls (2 chunks + the shortlist). Output tokens are not negligible — a
-240-option `Choice` returns a 240-number distribution, so budget for them.
+240-option `Choice` returns a 240-number distribution, so budget for them. A second,
+independent measurement on a 131-skill roster (single chunk, n=12) came in lower on cost and
+higher on latency: **~$0.0002 per routed turn, p50 1.93 s, max 8.56 s**. Latency is the real
+budget item — it lands on every routed turn.
 
 The vendor publishes an agent-level effect for the same idea (315 graded turns, block placed in
 the system prompt): wrong skill loads 16.8% → 7.3%, needless loads 9.8% → 4.0%, 37 turns fixed
@@ -128,6 +136,12 @@ Two requests, thresholds in code:
    would prose alone satisfy it). The gate is the mean of those three, with the third inverted.
 2. **Narrow.** One `Choice` over the top `shortlist` plus `none_of_these`, and one `Noul` per
    candidate: *does this skill do the specific thing the request asks for?*
+
+The suggestion is the `Choice` winner only when it is also the best-fitting candidate (a tie
+counts). When `fits` prefers a different candidate, that one is suggested instead — but only
+if it clears `fits` itself *and* leads the winner's own `fits` by `fits_margin`. Any other
+disagreement is silence: both signals were paid for in the same request, and a wrong name
+costs more than no name.
 
 A chunk cut off by `P(none_of_these) >= 0.50` nominates nobody, except the best chunk, so a
 shortlist is never empty when something fits. Candidates are ranked by `(-probability, name)`,

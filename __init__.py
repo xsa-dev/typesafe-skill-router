@@ -28,7 +28,7 @@ try:  # Hermes imports this file as a package: ``hermes_plugins.typesafe_skill_r
     from .typesafe_router.cache import JsonCache
     from .typesafe_router.client import SystemOneClient
     from .typesafe_router.roster import Skill, load_roster, skills_root, stats
-    from .typesafe_router.router import FITS_THRESHOLD, GATE_THRESHOLD, suggest
+    from .typesafe_router.router import FITS_MARGIN, FITS_THRESHOLD, GATE_THRESHOLD, suggest
 except ImportError:  # imported as a bare module (tooling that loads __init__.py by path)
     import sys as _sys
 
@@ -38,7 +38,7 @@ except ImportError:  # imported as a bare module (tooling that loads __init__.py
     from typesafe_router.cache import JsonCache
     from typesafe_router.client import SystemOneClient
     from typesafe_router.roster import Skill, load_roster, skills_root, stats
-    from typesafe_router.router import FITS_THRESHOLD, GATE_THRESHOLD, suggest
+    from typesafe_router.router import FITS_MARGIN, FITS_THRESHOLD, GATE_THRESHOLD, suggest
 
 PLUGIN_NAME = "typesafe-skill-router"
 PLUGIN_VERSION = "1.0.0"
@@ -49,6 +49,7 @@ DEFAULTS: Dict[str, Any] = {
     "enabled": False,          # opt-in: nothing is sent anywhere until you turn it on
     "gate": GATE_THRESHOLD,    # mean of the three request judgments; below -> suggest nothing
     "fits": FITS_THRESHOLD,    # winner's own "does this fit" judgment; below -> nothing
+    "fits_margin": FITS_MARGIN,  # lead fits needs over the Choice winner's own to override it
     "shortlist": 3,            # candidates carried into the second request
     "chunk": 240,              # the API caps one Choice at 255 options
     "excerpt": 700,            # SKILL.md characters each candidate brings
@@ -117,6 +118,7 @@ def _settings(ctx: Any) -> Dict[str, Any]:
         "enabled": _as_bool(_setting(ctx, "enabled"), DEFAULTS["enabled"]),
         "gate": _as_float(_setting(ctx, "gate"), DEFAULTS["gate"]),
         "fits": _as_float(_setting(ctx, "fits"), DEFAULTS["fits"]),
+        "fits_margin": max(0.0, _as_float(_setting(ctx, "fits_margin"), DEFAULTS["fits_margin"])),
         "shortlist": max(1, _as_int(_setting(ctx, "shortlist"), DEFAULTS["shortlist"])),
         "chunk": max(1, _as_int(_setting(ctx, "chunk"), DEFAULTS["chunk"])),
         "excerpt": max(80, _as_int(_setting(ctx, "excerpt"), DEFAULTS["excerpt"])),
@@ -263,6 +265,7 @@ def route(ctx: Any, request: str) -> Optional[dict]:
             excerpt=settings["excerpt"],
             gate_threshold=settings["gate"],
             fits_threshold=settings["fits"],
+            fits_margin=settings["fits_margin"],
             chunk=settings["chunk"],
         ),
     )
@@ -329,7 +332,7 @@ def _cli_handler(ctx: Any):
             print(f"{PLUGIN_NAME} {PLUGIN_VERSION}")
             print(f"  enabled   : {settings['enabled']}  ({'on' if settings['enabled'] else 'off'})")
             print(f"  thresholds: gate {settings['gate']:.2f} / fits {settings['fits']:.2f} "
-                  f"/ shortlist {settings['shortlist']}")
+                  f"/ margin {settings['fits_margin']:.2f} / shortlist {settings['shortlist']}")
             print(f"  roster    : {roster_dir(ctx)} — {info['skills']} skills, "
                   f"{info['categories']} categories")
             print(f"  model     : {settings['model']} @ {settings['base_url'] or 'https://api.typesafe.ai'}")
@@ -349,7 +352,7 @@ def _cli_handler(ctx: Any):
                 client, text, skills,
                 shortlist=settings["shortlist"], excerpt=settings["excerpt"],
                 gate_threshold=settings["gate"], fits_threshold=settings["fits"],
-                chunk=settings["chunk"],
+                fits_margin=settings["fits_margin"], chunk=settings["chunk"],
             )
             payload = result.as_dict()
             print(json.dumps(payload, separators=(",", ":")) if args.json

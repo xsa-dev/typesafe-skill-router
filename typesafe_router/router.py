@@ -23,12 +23,21 @@ SHORTLIST = 3  # candidates carried from the first request into the second
 EXCERPT_CHARS = 700  # SKILL.md characters each candidate brings
 GATE_THRESHOLD = 0.30  # mean of the three request nouls, below which nothing is suggested
 FITS_THRESHOLD = 0.40  # winner's own "does this fit" noul, below which nothing is suggested
+FITS_MARGIN = 0.15  # lead the best fits needs over the Choice winner's own to override it
 # The cookbook ships 0.40 for neither threshold; it starts both at 0.30 and says to evaluate on
 # your own data. Measured here (`tfl sweep`, 50 labelled requests, cache-only): gate 0.30 / fits
 # 0.30 gives 88.5% top-1 and 12.5% needless suggestions; moving fits to 0.40 keeps top-1 at
 # 88.5% while needless drops to 8.3% with no covered request lost (missed 0.0%). At fits 0.50
 # the first legitimate suggestion starts being dropped (missed 3.9%), and any gate above 0.30
 # only loses hits. So fits moved; gate stayed where the cookbook put it.
+#
+# The margin exists because the Choice and the fits nouls can disagree: the Choice picks a
+# sibling while fits clearly prefers another (measured live: winner at 0.53-0.54 while the
+# right skill sat at 0.68-0.85 — see issue #1). Deciding by max(fits) alone fixes those and
+# introduces its own miss (an unrelated skill at 0.72 turning a correct silence into a wrong
+# name), so the winner is only overridden when the fits leader clears the bar *and* leads by
+# this margin; a smaller gap is a coin flip between two signals, and a wrong name costs more
+# than silence. 0.15 sits under the measured real gaps without treating noise as a verdict.
 
 # The API refuses a question with more than 255 choices ("Too many choices. Must have at most
 # 255 choices."), discovered by running a 292-skill roster at it. The published cookbook's 182
@@ -288,6 +297,7 @@ def suggest(
     excerpt: int = EXCERPT_CHARS,
     gate_threshold: float = GATE_THRESHOLD,
     fits_threshold: float = FITS_THRESHOLD,
+    fits_margin: float = FITS_MARGIN,
     recent_context: str = "",
     chunk: int = CHUNK_CHOICES,
     workers: int = 4,
@@ -337,17 +347,45 @@ def suggest(
     if second["winner"] is None:
         result.reason = f"stage 2 picked {second['picked'] or 'nothing'}: no skill fits"
         return result
-    winner_fits = second["fits"].get(second["winner"], 0.0)
-    if winner_fits < fits_threshold:
-        best = max(second["fits"].values()) if second["fits"] else 0.0
+
+    # The Choice and the fits nouls are two judgments of the same question, and both were
+    # paid for — use both. The winner is suggested when it is (or ties) the fits argmax.
+    # When fits prefers another candidate, that candidate takes over only by clearing the
+    # bar itself *and* leading the winner's own fits by fits_margin; anything less decisive
+    # is two signals disagreeing, and a wrong name costs more than silence.
+    winner = second["winner"]
+    winner_fits = second["fits"].get(winner, 0.0)
+    ranked_fits = sorted(second["fits"].items(), key=lambda kv: (-kv[1], kv[0]))
+    best_name, best_fits = ranked_fits[0] if ranked_fits else (winner, 0.0)
+
+    if winner_fits >= best_fits:
+        if winner_fits < fits_threshold:
+            result.reason = (
+                f"winner {winner} fits {winner_fits:.2f} < {fits_threshold:.2f}: nothing fits"
+            )
+            return result
+        result.names = (winner,)
+        result.reason = f"shortlist winner with fits {winner_fits:.2f}"
+        return result
+
+    if best_fits >= fits_threshold and best_fits - winner_fits >= fits_margin:
+        result.names = (best_name,)
         result.reason = (
-            f"winner {second['winner']} fits {winner_fits:.2f} < {fits_threshold:.2f} "
-            f"(best candidate {best:.2f}): nothing fits"
+            f"fits override: {best_name} {best_fits:.2f} leads winner {winner} "
+            f"{winner_fits:.2f} by {best_fits - winner_fits:.2f}"
         )
         return result
 
-    result.names = (second["winner"],)
-    result.reason = f"shortlist winner with fits {winner_fits:.2f}"
+    if best_fits < fits_threshold:
+        result.reason = (
+            f"winner {winner} fits {winner_fits:.2f}, best candidate {best_name} "
+            f"{best_fits:.2f} < {fits_threshold:.2f}: nothing fits"
+        )
+    else:
+        result.reason = (
+            f"choice picked {winner} (fits {winner_fits:.2f}) but {best_name} fits "
+            f"{best_fits:.2f}: lead under the {fits_margin:.2f} margin, staying silent"
+        )
     return result
 
 

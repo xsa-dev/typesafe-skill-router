@@ -28,6 +28,8 @@ config_schema:
     type: float
   fits:
     type: float
+  fits_margin:
+    type: float
   shortlist:
     type: int
   chunk:
