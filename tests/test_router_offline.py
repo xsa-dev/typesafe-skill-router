@@ -147,6 +147,25 @@ def test_fits_leader_below_the_bar_cannot_override():
     assert "nothing fits" in result.reason
 
 
+def test_fits_leader_cannot_override_a_winner_below_the_bar():
+    """Reported live on issue #1: an unrelated skill at 0.73 overrode a correct
+    price-cache-refresh winner sitting at 0.32, turning a correct silence into a
+    wrong suggestion. A lead over a sub-threshold winner is the largest number in
+    a weak set, not a disagreement — the answer is silence."""
+    client = scripted_client(
+        stage1="price-cache-refresh", stage2="price-cache-refresh",
+        fits={"language-tutor": 0.73, "price-cache-refresh": 0.32, "transit-booking": 0.03},
+    )
+    result = suggest(
+        client, "refresca el cache de precios de la ruta",
+        [skill("language-tutor"), skill("price-cache-refresh"), skill("transit-booking")],
+    )
+
+    assert result.names == ()
+    assert result.winner == "price-cache-refresh"
+    assert "nothing fits" in result.reason
+
+
 def test_winner_tied_with_the_fits_leader_still_wins():
     """A tie counts as agreement: the Choice breaks it and the bar still applies."""
     client = scripted_client(stage1="skill-000", stage2="skill-000",

@@ -36,8 +36,11 @@ FITS_MARGIN = 0.15  # lead the best fits needs over the Choice winner's own to o
 # right skill sat at 0.68-0.85 — see issue #1). Deciding by max(fits) alone fixes those and
 # introduces its own miss (an unrelated skill at 0.72 turning a correct silence into a wrong
 # name), so the winner is only overridden when the fits leader clears the bar *and* leads by
-# this margin; a smaller gap is a coin flip between two signals, and a wrong name costs more
-# than silence. 0.15 sits under the measured real gaps without treating noise as a verdict.
+# this margin *over a winner that also clears the bar*; a smaller gap is a coin flip between
+# two signals, a wrong name costs more than silence, and a lead over a sub-threshold winner
+# is just the largest number in a weak set — measured live at 0.73 over a 0.32 winner, a
+# false positive no margin separates from the real 0.16-0.37 gaps. 0.15 sits under the
+# measured real gaps without treating noise as a verdict.
 
 # The API refuses a question with more than 255 choices ("Too many choices. Must have at most
 # 255 choices."), discovered by running a 292-skill roster at it. The published cookbook's 182
@@ -351,8 +354,10 @@ def suggest(
     # The Choice and the fits nouls are two judgments of the same question, and both were
     # paid for — use both. The winner is suggested when it is (or ties) the fits argmax.
     # When fits prefers another candidate, that candidate takes over only by clearing the
-    # bar itself *and* leading the winner's own fits by fits_margin; anything less decisive
-    # is two signals disagreeing, and a wrong name costs more than silence.
+    # bar itself *and* leading the winner's own fits by fits_margin *and* facing a winner
+    # that also clears the bar — an override resolves a disagreement between two signals
+    # that each found a fitting skill, so a sub-threshold winner leaves nothing to resolve:
+    # the leader is then the largest number in a set of weak scores, not a rival verdict.
     winner = second["winner"]
     winner_fits = second["fits"].get(winner, 0.0)
     ranked_fits = sorted(second["fits"].items(), key=lambda kv: (-kv[1], kv[0]))
@@ -368,7 +373,11 @@ def suggest(
         result.reason = f"shortlist winner with fits {winner_fits:.2f}"
         return result
 
-    if best_fits >= fits_threshold and best_fits - winner_fits >= fits_margin:
+    if (
+        best_fits >= fits_threshold
+        and winner_fits >= fits_threshold
+        and best_fits - winner_fits >= fits_margin
+    ):
         result.names = (best_name,)
         result.reason = (
             f"fits override: {best_name} {best_fits:.2f} leads winner {winner} "
@@ -380,6 +389,11 @@ def suggest(
         result.reason = (
             f"winner {winner} fits {winner_fits:.2f}, best candidate {best_name} "
             f"{best_fits:.2f} < {fits_threshold:.2f}: nothing fits"
+        )
+    elif winner_fits < fits_threshold:
+        result.reason = (
+            f"winner {winner} fits {winner_fits:.2f} < {fits_threshold:.2f} "
+            f"(best candidate {best_name} {best_fits:.2f}): nothing fits"
         )
     else:
         result.reason = (
