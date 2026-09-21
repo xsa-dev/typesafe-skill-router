@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import sys
 import time
+import types
 
 import pytest
 
@@ -279,3 +281,78 @@ def test_disabled_skill_is_never_suggested_end_to_end(env, tmp_path, monkeypatch
     module._roster_cache.clear()
     allowed = module.pre_llm_call(_typesafe_ctx=ctx, user_message="clear my gmail spam")
     assert allowed is not None and "gmail-cleanup" in allowed["context"]
+
+
+def test_scalar_disabled_entry_excludes_the_skill(skills_dir, tmp_path, monkeypatch):
+    """`disabled: spam-sweep` — a bare scalar — is one name, not a string to iterate
+    character by character (the comprehension that did so left every skill routable)."""
+    module = plugin_module()
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+    (tmp_path / "home").mkdir()
+    (tmp_path / "home" / "config.yaml").write_text(
+        "skills:\n  disabled: spam-sweep\n", encoding="utf-8"
+    )
+    ctx = _ctx(module, {"roster_dir": str(skills_dir)})
+    names = {s.name for s in module._roster(ctx)}
+    assert "spam-sweep" not in names
+    assert {"gmail-cleanup", "plain"} <= names
+
+
+def test_serialized_list_string_disables_the_named_skills(skills_dir, tmp_path, monkeypatch):
+    """`hermes config set` stores lists as quoted strings: `'["spam-sweep", "plain"]'`
+    must unpack to two names, matching Hermes' parse_config_string_list."""
+    module = plugin_module()
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+    (tmp_path / "home").mkdir()
+    (tmp_path / "home" / "config.yaml").write_text(
+        'skills:\n  disabled: \'["spam-sweep", "plain"]\'\n', encoding="utf-8"
+    )
+    ctx = _ctx(module, {"roster_dir": str(skills_dir)})
+    names = {s.name for s in module._roster(ctx)}
+    assert names == {"gmail-cleanup"}
+
+
+def test_session_platform_comes_from_hermes_session_context(skills_dir, tmp_path, monkeypatch):
+    """Gateway sessions bind HERMES_SESSION_PLATFORM in a ContextVar, not os.environ —
+    the fallback read must go through gateway.session_context.get_session_env."""
+    module = plugin_module()
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+    (tmp_path / "home").mkdir()
+    (tmp_path / "home" / "config.yaml").write_text(
+        "skills:\n  platform_disabled:\n    telegram:\n      - plain\n", encoding="utf-8"
+    )
+    monkeypatch.delenv("HERMES_PLATFORM", raising=False)
+    monkeypatch.delenv("HERMES_SESSION_PLATFORM", raising=False)  # process env has neither
+
+    gateway_pkg = types.ModuleType("gateway")
+    session_ctx = types.ModuleType("gateway.session_context")
+    session_ctx.get_session_env = lambda name, default="": (
+        "telegram" if name == "HERMES_SESSION_PLATFORM" else default
+    )
+    gateway_pkg.session_context = session_ctx
+    monkeypatch.setitem(sys.modules, "gateway", gateway_pkg)
+    monkeypatch.setitem(sys.modules, "gateway.session_context", session_ctx)
+
+    ctx = _ctx(module, {"roster_dir": str(skills_dir)})
+    names = {s.name for s in module._roster(ctx)}
+    assert "plain" not in names
+    assert "gmail-cleanup" in names
+
+
+def test_config_changes_take_effect_inside_the_roster_ttl(skills_dir, tmp_path, monkeypatch):
+    """Regression: the filtered roster must not outlive a config change. The directory
+    scan stays cached, but the disabled set is re-read on every call."""
+    module = plugin_module()
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.yaml").write_text("skills:\n  disabled: []\n", encoding="utf-8")
+    ctx = _ctx(module, {"roster_dir": str(skills_dir)})
+    assert "spam-sweep" in {s.name for s in module._roster(ctx)}
+
+    (home / "config.yaml").write_text(
+        "skills:\n  disabled:\n    - spam-sweep\n", encoding="utf-8"
+    )
+    names = {s.name for s in module._roster(ctx)}  # same TTL window, no cache clear
+    assert "spam-sweep" not in names
+    assert {"gmail-cleanup", "plain"} <= names
