@@ -14,6 +14,7 @@ line and returns ``None``; a router problem must never break a turn.
 
 from __future__ import annotations
 
+import ast
 import json
 import logging
 import os
@@ -65,7 +66,7 @@ DEFAULTS: Dict[str, Any] = {
 logger = logging.getLogger(__name__)
 
 _ROSTER_TTL = 300.0
-_roster_cache: Dict[str, tuple] = {}  # resolved roster dir -> (built_at, skills)
+_roster_cache: Dict[str, tuple] = {}  # resolved roster dir -> (built_at, unfiltered scan)
 _roster_lock = threading.RLock()
 _executor: Optional[ThreadPoolExecutor] = None
 _executor_lock = threading.Lock()
@@ -194,19 +195,87 @@ def _within(seconds: float, fn):
         raise TimeoutError(f"routing exceeded the {seconds:.0f}s budget")
 
 
+# ─── config.yaml: skills.disabled ────────────────────────────────────────────
+#: Hermes never offers these skills to the agent (agent/skill_utils.get_disabled_skill_names),
+#: so the roster must not suggest them either — a disabled name is one ``skill_view`` refuses.
+#: ``hermes-agent`` mirrors Hermes' own ESSENTIAL_SKILLS carve-out.
+ESSENTIAL_SKILLS = frozenset({"hermes-agent"})
+
+
+def _config_string_set(value: Any) -> "set[str]":
+    """A ``disabled``-style config entry as a set of names. Mirrors agent/skill_utils'
+    ``parse_config_string_list`` + ``_normalize_string_set``: a scalar is one name, a
+    ``"[...]"`` string is a serialized list (``hermes config set`` stores those), and a
+    real list/tuple/set is itemized. Anything else contributes nothing."""
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith("["):
+            try:
+                parsed = ast.literal_eval(stripped)
+            except (ValueError, SyntaxError):
+                parsed = None
+            if isinstance(parsed, list):
+                return {name for name in (str(item).strip() for item in parsed) if name}
+        return {stripped} if stripped else set()
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return {name for name in (str(item).strip() for item in value) if name}
+    return set()
+
+
+def _session_env(name: str) -> str:
+    """A session var the way Hermes reads it (``gateway.session_context.get_session_env``):
+    the session-bound ContextVar wins, then the process environment. The gateway binds
+    ``HERMES_SESSION_PLATFORM`` per *session* — concurrent sessions carry different
+    platforms without mutating ``os.environ``, so a plain env read misses them. Outside
+    a Hermes process (or a host without the helper) this is just the env var."""
+    try:
+        from gateway.session_context import get_session_env
+        return get_session_env(name, "")
+    except Exception:
+        return os.environ.get(name, "")
+
+
+def _disabled_skill_names() -> "set[str]":
+    """Names disabled in ``<hermes home>/config.yaml``: the global ``skills.disabled``
+    list unioned with the session platform's ``skills.platform_disabled`` list — the
+    same union Hermes applies when building the agent's own skill index. Best-effort
+    in both directions: a config that cannot be read disables nothing, which matches
+    pre-filter behaviour exactly."""
+    try:
+        import yaml
+
+        config = yaml.safe_load((hermes_home() / "config.yaml").read_text(encoding="utf-8")) or {}
+        skills_cfg = config.get("skills") or {}
+        if not isinstance(skills_cfg, dict):
+            return set()
+        disabled = _config_string_set(skills_cfg.get("disabled"))
+        platform = os.environ.get("HERMES_PLATFORM") or _session_env("HERMES_SESSION_PLATFORM")
+        per_platform = skills_cfg.get("platform_disabled")
+        if platform and isinstance(per_platform, dict):
+            disabled |= _config_string_set(per_platform.get(platform))
+        return disabled - ESSENTIAL_SKILLS
+    except Exception:
+        return set()
+
+
 def _roster(ctx: Any) -> List[Skill]:
-    """The live roster, re-read every ``_ROSTER_TTL`` seconds (installs change under us)."""
+    """The live roster. The directory scan is cached for ``_ROSTER_TTL`` seconds
+    (installs change under us), but the disabled-skill filter runs on every call —
+    the cache key is only the directory, while the filtered result also depends on
+    config.yaml and the session platform, both mutable inside the TTL."""
     directory = roster_dir(ctx)
     key = str(directory)
     now = time.time()
     with _roster_lock:
         hit = _roster_cache.get(key)
-        if hit and now - hit[0] < _ROSTER_TTL:
-            return hit[1]
-    skills = load_roster(directory)
-    with _roster_lock:
-        _roster_cache[key] = (now, skills)
-    return skills
+        scanned = hit[1] if hit and now - hit[0] < _ROSTER_TTL else None
+    if scanned is None:
+        scanned = load_roster(directory)
+        with _roster_lock:
+            _roster_cache[key] = (now, scanned)
+    # Keep the roster aligned with the agent's index: never suggest a disabled skill.
+    disabled = _disabled_skill_names()
+    return [s for s in scanned if s.name not in disabled]
 
 
 def _client(ctx: Any, settings: Dict[str, Any]) -> SystemOneClient:
