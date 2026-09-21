@@ -218,3 +218,64 @@ def _ctx(module, settings):
 
     ctx = StubContext(settings)
     return ctx
+
+
+# ─── skills.disabled alignment ────────────────────────────────────────────────
+def test_roster_excludes_skills_disabled_in_config(skills_dir, tmp_path, monkeypatch):
+    """Regression: the roster must match the agent's index — disabled names never suggested."""
+    module = plugin_module()
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+    (tmp_path / "home").mkdir()
+    (tmp_path / "home" / "config.yaml").write_text(
+        "skills:\n  disabled:\n    - spam-sweep\n", encoding="utf-8"
+    )
+    ctx = _ctx(module, {"roster_dir": str(skills_dir)})
+    names = {s.name for s in module._roster(ctx)}
+    assert "spam-sweep" not in names
+    assert {"gmail-cleanup", "plain"} <= names
+
+
+def test_platform_disabled_list_is_unioned(skills_dir, tmp_path, monkeypatch):
+    module = plugin_module()
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+    (tmp_path / "home").mkdir()
+    (tmp_path / "home" / "config.yaml").write_text(
+        "skills:\n  platform_disabled:\n    telegram:\n      - plain\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("HERMES_PLATFORM", "telegram")
+    ctx = _ctx(module, {"roster_dir": str(skills_dir)})
+    names = {s.name for s in module._roster(ctx)}
+    assert "plain" not in names
+    assert "gmail-cleanup" in names
+
+
+def test_unreadable_config_disables_nothing(skills_dir, tmp_path, monkeypatch):
+    """Missing/broken config must match pre-filter behaviour: the full roster, no crash."""
+    module = plugin_module()
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "no-such-home"))
+    ctx = _ctx(module, {"roster_dir": str(skills_dir)})
+    names = {s.name for s in module._roster(ctx)}
+    assert names == {"gmail-cleanup", "spam-sweep", "plain"}
+
+
+def test_disabled_skill_is_never_suggested_end_to_end(env, tmp_path, monkeypatch):
+    """The hook itself stays silent when the only fitting skill is disabled (and the
+    control run proves the wiring: without the disabled entry it suggests)."""
+    module = plugin_module()
+    home = tmp_path / "home"  # same tmp_path the ``env`` fixture used
+    home.mkdir(parents=True, exist_ok=True)
+    ctx = _ctx(module, env)
+    client = _ok_client()  # would pick gmail-cleanup if it were on the roster
+
+    home.joinpath("config.yaml").write_text(
+        "skills:\n  disabled:\n    - gmail-cleanup\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(module, "_client", lambda *a, **k: client)
+    module._roster_cache.clear()
+    blocked = module.pre_llm_call(_typesafe_ctx=ctx, user_message="clear my gmail spam")
+    assert blocked is None
+
+    home.joinpath("config.yaml").write_text("skills:\n  disabled: []\n", encoding="utf-8")
+    module._roster_cache.clear()
+    allowed = module.pre_llm_call(_typesafe_ctx=ctx, user_message="clear my gmail spam")
+    assert allowed is not None and "gmail-cleanup" in allowed["context"]

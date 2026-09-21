@@ -194,6 +194,38 @@ def _within(seconds: float, fn):
         raise TimeoutError(f"routing exceeded the {seconds:.0f}s budget")
 
 
+# ─── config.yaml: skills.disabled ────────────────────────────────────────────
+#: Hermes never offers these skills to the agent (agent/skill_utils.get_disabled_skill_names),
+#: so the roster must not suggest them either — a disabled name is one ``skill_view`` refuses.
+#: ``hermes-agent`` mirrors Hermes' own ESSENTIAL_SKILLS carve-out.
+ESSENTIAL_SKILLS = frozenset({"hermes-agent"})
+
+
+def _disabled_skill_names() -> "set[str]":
+    """Names disabled in ``<hermes home>/config.yaml``: the global ``skills.disabled``
+    list unioned with the session platform's ``skills.platform_disabled`` list — the
+    same union Hermes applies when building the agent's own skill index. Best-effort
+    in both directions: a config that cannot be read disables nothing, which matches
+    pre-filter behaviour exactly."""
+    try:
+        import yaml
+
+        config = yaml.safe_load((hermes_home() / "config.yaml").read_text(encoding="utf-8")) or {}
+        skills_cfg = config.get("skills") or {}
+        if not isinstance(skills_cfg, dict):
+            return set()
+        disabled = {e.strip() for e in (skills_cfg.get("disabled") or [])
+                    if isinstance(e, str) and e.strip()}
+        platform = os.environ.get("HERMES_PLATFORM") or os.environ.get("HERMES_SESSION_PLATFORM")
+        per_platform = skills_cfg.get("platform_disabled")
+        if platform and isinstance(per_platform, dict):
+            disabled |= {e.strip() for e in (per_platform.get(platform) or [])
+                         if isinstance(e, str) and e.strip()}
+        return disabled - ESSENTIAL_SKILLS
+    except Exception:
+        return set()
+
+
 def _roster(ctx: Any) -> List[Skill]:
     """The live roster, re-read every ``_ROSTER_TTL`` seconds (installs change under us)."""
     directory = roster_dir(ctx)
@@ -203,7 +235,8 @@ def _roster(ctx: Any) -> List[Skill]:
         hit = _roster_cache.get(key)
         if hit and now - hit[0] < _ROSTER_TTL:
             return hit[1]
-    skills = load_roster(directory)
+    # Keep the roster aligned with the agent's index: never suggest a disabled skill.
+    skills = [s for s in load_roster(directory) if s.name not in _disabled_skill_names()]
     with _roster_lock:
         _roster_cache[key] = (now, skills)
     return skills
