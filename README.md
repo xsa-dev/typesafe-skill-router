@@ -59,7 +59,7 @@ Under `plugins.entries.typesafe-skill-router.settings` in `config.yaml` (all opt
 | `enabled` | `false` | Master switch. Nothing is sent anywhere until this is true. |
 | `gate` | `0.30` | Mean of the three request judgments. Below it, nothing is suggested and no second request is spent. |
 | `fits` | `0.40` | The winner's own "does this skill do the specific thing asked for" judgment. Below it, nothing is injected. |
-| `fits_margin` | `0.15` | When `fits` prefers a different candidate than the `Choice` winner, it takes over only by leading the winner's own `fits` by this much (and clearing `fits` itself). |
+| `fits_margin` | `0.15` | When `fits` prefers a different candidate than the `Choice` winner, it takes over only by leading the winner's own `fits` by this much, clearing `fits` itself, and facing a winner that also clears `fits`. |
 | `shortlist` | `3` | Candidates carried into the second request. |
 | `chunk` | `240` | Skills per request. The API caps a question at 255 options. |
 | `excerpt` | `700` | Characters of `SKILL.md` shown per shortlisted candidate. |
@@ -139,7 +139,9 @@ Two requests, thresholds in code:
 
 The suggestion is the `Choice` winner only when it is also the best-fitting candidate (a tie
 counts). When `fits` prefers a different candidate, that one is suggested instead — but only
-if it clears `fits` itself *and* leads the winner's own `fits` by `fits_margin`. Any other
+if it clears `fits` itself, leads the winner's own `fits` by `fits_margin`, *and* the winner
+also clears `fits`: an override resolves a disagreement between two signals that each found
+a fitting skill, and a winner below the bar means stage two simply found no fit. Any other
 disagreement is silence: both signals were paid for in the same request, and a wrong name
 costs more than no name.
 
