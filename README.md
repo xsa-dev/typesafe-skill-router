@@ -70,6 +70,27 @@ Laya keeps inference local and has no per-request API charge. Its published guid
 that choice accuracy falls as the option count grows, so this plugin never presents it with
 more than 20 options at once. TypeSafe remains the default backend.
 
+### Backend differences
+
+The two servers expose the same `/v1/systemone` shape, but they are not interchangeable in
+operation or calibration:
+
+| | TypeSafe | laya.cpp |
+|---|---|---|
+| `backend` | `typesafe` (default) | `laya` |
+| Default URL | `https://api.typesafe.ai` | `http://127.0.0.1:8080` |
+| Default model | `jev-latest` | `laya-latest` |
+| Authentication | `TYPESAFE_API_KEY` required | none on loopback; optional `LAYA_API_KEY` |
+| Wide-ranking shape | up to 240 skills per chunk | tournament: 19 skills + `none_of_these` per match |
+| Data boundary | request and skill metadata leave the machine | stays local with the default loopback URL |
+| Usage cost | hosted API pricing | no per-request API charge; uses local compute |
+| Thresholds | shipped values were measured with Jev | evaluate separately; Jev thresholds are only starting values |
+
+`model` and `base_url` remain overrides, but an endpoint merely accepting the same JSON does
+not make its probabilities equivalent. Other Jev-compatible/open-weight servers need their
+own documented authentication, choice-cardinality, and threshold profile before being called
+a supported backend.
+
 If Hermes was already running when you installed the plugin, restart that process once so the
 hook is loaded (`hermes gateway restart`, or the service that runs your chat backend). Switching
 it on and off afterwards takes effect immediately.
